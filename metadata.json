@@ -1,0 +1,5 @@
+{
+  "name": "Calificación de Tareas",
+  "description": "Automatiza la calificación de tareas basándote en la existencia de carpetas en Google Drive. Importa listas de estudiantes y contenidos de carpetas mediante IA para generar reportes en Excel.",
+  "requestFramePermissions": []
+}
