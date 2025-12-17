@@ -1,12 +1,10 @@
 import { GoogleGenAI } from "@google/genai";
-import { Student, Assignment } from "../types";
+import { Student, Assignment } from "../types.ts";
 
 // --- API KEY MANAGEMENT ---
 
-// Helper to sanitize API Key
 const getApiKey = () => {
-  // CLAVE ACTUALIZADA MANUALMENTE: Proyecto "Prueba APP"
-  // Se utiliza esta clave directamente para garantizar acceso a la API de Drive
+  // Hardcoded API Key for demo purposes
   return "AIzaSyCJJPq0Q2fVCH5L9VI1_VXT2vpa48vjd_o";
 };
 
@@ -36,7 +34,6 @@ export const extractStudentInfo = (folderName: string): { name: string, id: stri
     const cleanupTerms = [
         'assignsubmission file', 'assignsubmission', 'file', 
         'tarea', 'trabajo grupal', 'atrasado', 'copia' 
-        // Removed 'de' to protect names like "De La Cruz"
     ];
     cleanupTerms.forEach(term => {
         const regex = new RegExp(`\\b${term}\\b`, 'g');
@@ -55,11 +52,11 @@ export const extractStudentInfo = (folderName: string): { name: string, id: stri
 
 const extractGoogleId = (url: string): string | null => {
     const patterns = [
-        /\/d\/([a-zA-Z0-9-_]+)/,        // Standard File/Folder
-        /folders\/([a-zA-Z0-9-_]+)/,    // Folders
-        /id=([a-zA-Z0-9-_]+)/,          // ID param
-        /open\?id=([a-zA-Z0-9-_]+)/,    // Open param
-        /^([a-zA-Z0-9-_]+)$/            // Raw ID
+        /\/d\/([a-zA-Z0-9-_]+)/,        
+        /folders\/([a-zA-Z0-9-_]+)/,    
+        /id=([a-zA-Z0-9-_]+)/,          
+        /open\?id=([a-zA-Z0-9-_]+)/,    
+        /^([a-zA-Z0-9-_]+)$/            
     ];
 
     for (const pattern of patterns) {
@@ -77,9 +74,6 @@ interface DriveFile {
     mimeType: string;
 }
 
-/**
- * Fetches files directly from Google Drive API.
- */
 const fetchDriveFiles = async (folderId: string): Promise<DriveFile[]> => {
     const apiKey = getApiKey();
     const safeFolderId = folderId.replace(/[^a-zA-Z0-9-_]/g, ""); 
@@ -97,12 +91,10 @@ const fetchDriveFiles = async (folderId: string): Promise<DriveFile[]> => {
 
     const url = `${baseUrl}?${params.toString()}`;
 
-    // Standard headers
     const headers = {
         'Accept': 'application/json'
     };
 
-    // 'no-referrer' helps prevent 403 errors if the key has strict referrer restrictions
     const response = await fetch(url, { 
         method: 'GET', 
         headers,
@@ -122,20 +114,14 @@ const fetchDriveFiles = async (folderId: string): Promise<DriveFile[]> => {
         console.error(msg);
 
         if (response.status === 403) {
-            throw new Error(`PERMISO DENEGADO (403): La clave configurada es válida, pero el servicio "Google Drive API" no está activado en Google Cloud Console para esta clave.`);
+            throw new Error(`PERMISO DENEGADO (403): API Drive no habilitada.`);
         }
-        
         if (response.status === 400) {
-            if (errorDetails.includes("API key not valid") || errorDetails.includes("API Key rechazada")) {
-                 throw new Error("ERROR DE CLAVE (400): La API Key configurada ha sido rechazada por Google. Verifica que no tenga restricciones de IP incorrectas.");
-            }
-            throw new Error(`Error 400 (Petición Incorrecta): ${errorDetails}`);
+            throw new Error(`Error 400 (Peticion Incorrecta): ${errorDetails}`);
         }
-        
         if (response.status === 404) {
-            throw new Error("CARPETA NO ENCONTRADA (404). Verifica que el enlace es correcto y que la carpeta es pública (Cualquiera con el enlace).");
+            throw new Error("CARPETA NO ENCONTRADA (404).");
         }
-        
         throw new Error(msg);
     }
 
@@ -146,10 +132,9 @@ const fetchDriveFiles = async (folderId: string): Promise<DriveFile[]> => {
 export const scanRootFolder = async (input: string): Promise<Assignment[]> => {
   const driveId = extractGoogleId(input);
   if (!driveId) {
-      throw new Error("No se pudo identificar un ID de carpeta válido.");
+      throw new Error("No se pudo identificar un ID de carpeta valido.");
   }
   
-  // 1. Fetch Root Content
   let rootFiles: DriveFile[] = [];
   try {
       rootFiles = await fetchDriveFiles(driveId);
@@ -161,8 +146,6 @@ export const scanRootFolder = async (input: string): Promise<Assignment[]> => {
 
   const folderMime = "application/vnd.google-apps.folder";
   
-  // 2. Scan Structure
-  // Look for sub-folders that look like tasks
   let taskFolders = rootFiles.filter(f => 
       f.mimeType === folderMime && 
       (f.name.toLowerCase().includes("tarea") || 
@@ -186,7 +169,7 @@ export const scanRootFolder = async (input: string): Promise<Assignment[]> => {
                   maxPoints: 20
               });
           } catch (e) {
-              console.warn(`Skipping task folder ${task.name} due to error`, e);
+              console.warn(`Skipping task folder ${task.name}`, e);
           }
       }
   } else {
@@ -203,7 +186,6 @@ export const scanRootFolder = async (input: string): Promise<Assignment[]> => {
   return assignments;
 };
 
-// Fallback wrapper for UI compatibility
 export const parseAssignmentStructure = async (input: string, inputType: 'url' | 'text' | 'image'): Promise<Assignment[]> => {
     if (inputType === 'url' || input.startsWith('http')) {
         return await scanRootFolder(input);
@@ -211,7 +193,6 @@ export const parseAssignmentStructure = async (input: string, inputType: 'url' |
     return []; 
 };
 
-// --- SHEET PARSING (Unchanged) ---
 const fetchGvizData = async (sheetId: string): Promise<string | null> => {
     try {
         const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json`;

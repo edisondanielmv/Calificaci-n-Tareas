@@ -1,6 +1,6 @@
 import React from 'react';
-import { Student, Assignment } from '../types';
-import { downloadExcel, checkMatch } from '../utils/csv';
+import { Student, Assignment } from '../types.ts';
+import { downloadExcel, checkMatch } from '../utils/csv.ts';
 import { FileSpreadsheet, Check, X, RotateCcw, FileQuestion } from 'lucide-react';
 
 interface Props {

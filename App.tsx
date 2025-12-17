@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Student, Assignment, AppStep } from './types';
-import { StudentList } from './components/StudentList';
-import { GraderView } from './components/GraderView';
-import { LoginGate } from './components/LoginGate';
+import { Student, Assignment, AppStep } from './types.ts';
+import { StudentList } from './components/StudentList.tsx';
+import { GraderView } from './components/GraderView.tsx';
+import { LoginGate } from './components/LoginGate.tsx';
 import { GraduationCap } from 'lucide-react';
 
 export default function App() {
@@ -66,13 +66,6 @@ export default function App() {
 
       {/* Main Content */}
       <main className="max-w-4xl mx-auto px-6 py-8">
-        {!process.env.API_KEY && (
-           <div className="mb-6 p-4 bg-yellow-50 text-yellow-800 rounded-lg border border-yellow-200">
-             <strong>Advertencia:</strong> No se detectó la API Key en el entorno (process.env.API_KEY). 
-             La aplicación podría no funcionar correctamente si no está configurada.
-           </div>
-        )}
-        
         {renderStep()}
       </main>
     </div>

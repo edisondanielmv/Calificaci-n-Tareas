@@ -1,5 +1,5 @@
 import { utils, writeFile } from 'xlsx';
-import { Student, Assignment } from '../types';
+import { Student, Assignment } from '../types.ts';
 
 export const normalize = (str: string) => {
   return str

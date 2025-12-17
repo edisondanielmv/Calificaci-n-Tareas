@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Assignment, Student } from '../types';
-import { parseAssignmentStructure } from '../services/gemini';
+import { Assignment, Student } from '../types.ts';
+import { parseAssignmentStructure } from '../services/gemini.ts';
 import { FolderOpen, Plus, Trash2, Loader2, Link as LinkIcon, Check, AlertCircle } from 'lucide-react';
 
 interface Props {

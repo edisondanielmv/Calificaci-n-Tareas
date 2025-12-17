@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Student, Assignment } from '../types';
-import { parseStudentList, scanRootFolder } from '../services/gemini';
+import { Student, Assignment } from '../types.ts';
+import { parseStudentList, scanRootFolder } from '../services/gemini.ts';
 import { Users, Loader2, FolderOpen, ArrowRight, Link as LinkIcon, AlertCircle, CheckCircle2, Layers, ExternalLink, Key } from 'lucide-react';
 
 interface Props {
