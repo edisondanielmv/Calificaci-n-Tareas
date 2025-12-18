@@ -1,407 +1,363 @@
-import React, { useState, useEffect } from 'react';
-import ReactDOM from 'react-dom/client';
-import { GoogleGenAI } from "@google/genai";
-import { utils, writeFile } from 'xlsx';
+import React, { useState, useCallback, useMemo } from 'react';
+import { createRoot } from 'react-dom/client';
+import { GoogleGenAI, Type } from "@google/genai";
+import * as XLSX from 'xlsx';
 import { 
-  Users, Loader2, FolderOpen, ArrowRight, Link as LinkIcon, AlertCircle, 
-  CheckCircle2, Layers, Key, Plus, Trash2, Check, X, FileSpreadsheet, 
-  RotateCcw, FileQuestion, GraduationCap, Lock, ShieldAlert 
+  Users, Loader2, FolderOpen, ArrowRight, AlertCircle, 
+  Check, X, FileSpreadsheet, RotateCcw, GraduationCap, 
+  Download, ExternalLink, ShieldCheck
 } from 'lucide-react';
 
 // --- TYPES ---
-
-export interface Student {
-  id: string; 
-  firstName: string;
-  lastName: string;
-  rawText: string;
-}
-
-export interface Assignment {
+interface Student {
   id: string;
+  fullName: string;
+}
+
+interface FileRef {
   name: string;
-  driveLink?: string;
-  submittedStudents: string[];
-  maxPoints: number;
+  id: string;
 }
 
-export enum AppStep {
-  LOGIN = -1,
-  SETUP = 0,
-  RESULTS = 1
+interface Assignment {
+  title: string;
+  files: FileRef[];
 }
 
-// --- UTILS ---
-
-const normalize = (str: string) => {
-  return str
-      .toLowerCase()
-      .replace(/ñ/g, 'n')
-      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
+// --- HELPERS ---
+const extractDriveId = (url: string): string | null => {
+  if (!url) return null;
+  const match = url.match(/[-\w]{25,}/);
+  return match ? match[0] : null;
 };
 
-const checkMatch = (student: Student, folderName: string) => {
-  const normFolder = normalize(folderName);
-  const folderTokens = new Set(normFolder.split(" ")); 
+const normalize = (str: string): string => 
+  String(str || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, " ")
+    .trim();
 
-  const cleanId = student.id.trim();
-  if (cleanId.length > 4 && normFolder.includes(cleanId)) {
-      return true;
-  }
-
-  const firstNameTokens = normalize(student.firstName).split(" ").filter(t => t.length > 1);
-  const lastNameTokens = normalize(student.lastName).split(" ").filter(t => t.length > 1);
-
-  const matchedLast = lastNameTokens.filter(token => {
-      return folderTokens.has(token) || Array.from(folderTokens).some(ft => ft.includes(token));
-  }).length;
-
-  const matchedFirst = firstNameTokens.filter(token => {
-      return folderTokens.has(token) || Array.from(folderTokens).some(ft => ft.includes(token));
-  }).length;
+const fuzzyMatch = (student: Student, fileName: string): boolean => {
+  const sName = normalize(student.fullName);
+  const fName = normalize(fileName);
+  const sId = normalize(student.id);
   
-  const hasLastNameMatch = matchedLast > 0;
-  const hasFirstNameMatch = matchedFirst > 0;
-
-  if (hasLastNameMatch && hasFirstNameMatch) {
-      return true;
-  }
-
-  if (matchedLast === lastNameTokens.length && lastNameTokens.length >= 2) {
-      return true; 
-  }
-
-  return false;
-};
-
-const downloadExcel = (students: Student[], assignments: Assignment[]) => {
-  const data = students.map(student => {
-    const row: Record<string, string | number> = {
-      'Cédula': student.id,
-      'Apellidos': student.lastName,
-      'Nombres': student.firstName
-    };
-
-    let totalScore = 0;
-    assignments.forEach(assignment => {
-      const isSubmitted = assignment.submittedStudents.some(folderName => checkMatch(student, folderName));
-      const grade = isSubmitted ? 20 : 0;
-      row[assignment.name] = grade;
-      totalScore += grade;
-    });
-
-    row['NOTA FINAL'] = totalScore;
-    return row;
-  });
-
-  const worksheet = utils.json_to_sheet(data);
-  const wscols = [
-    { wch: 15 }, 
-    { wch: 25 }, 
-    { wch: 25 }, 
-    ...assignments.map(() => ({ wch: 15 })), 
-    { wch: 12 }  
-  ];
-  worksheet['!cols'] = wscols;
-
-  const workbook = utils.book_new();
-  utils.book_append_sheet(workbook, worksheet, "Calificaciones");
-  writeFile(workbook, "Reporte_Calificaciones.xlsx");
-};
-
-// --- SERVICES ---
-
-const getApiKey = () => "AIzaSyCJJPq0Q2fVCH5L9VI1_VXT2vpa48vjd_o";
-
-const getAi = () => {
-  const apiKey = getApiKey();
-  return new GoogleGenAI({ apiKey });
-};
-
-const extractGoogleId = (url: string): string | null => {
-    const patterns = [
-        /\/d\/([a-zA-Z0-9-_]+)/,        
-        /folders\/([a-zA-Z0-9-_]+)/,    
-        /id=([a-zA-Z0-9-_]+)/,          
-        /open\?id=([a-zA-Z0-9-_]+)/,    
-        /^([a-zA-Z0-9-_]+)$/            
-    ];
-
-    for (const pattern of patterns) {
-        const match = url.match(pattern);
-        if (match && match[1]) return match[1];
-    }
-    return null;
-};
-
-const fetchDriveFiles = async (folderId: string): Promise<any[]> => {
-    const apiKey = getApiKey();
-    const safeFolderId = folderId.replace(/[^a-zA-Z0-9-_]/g, ""); 
-    const baseUrl = "https://www.googleapis.com/drive/v3/files";
-    const query = `'${safeFolderId}' in parents and trashed = false`;
-    const params = new URLSearchParams({
-        q: query, key: apiKey, fields: 'files(id,name,mimeType)', pageSize: '1000'
-    });
-
-    const response = await fetch(`${baseUrl}?${params.toString()}`, { 
-        method: 'GET', headers: { 'Accept': 'application/json' }, referrerPolicy: 'no-referrer' 
-    });
-    
-    if (!response.ok) {
-        let errorDetails = "";
-        try { const json = await response.json(); errorDetails = json.error?.message; } catch (e) {}
-        if (response.status === 403) throw new Error("PERMISO DENEGADO (403): API Drive no habilitada o clave inválida.");
-        throw new Error(`Drive API Error (${response.status}): ${errorDetails}`);
-    }
-    const data = await response.json();
-    return data.files || [];
-};
-
-const scanRootFolder = async (input: string): Promise<Assignment[]> => {
-  const driveId = extractGoogleId(input);
-  if (!driveId) throw new Error("No se pudo identificar un ID de carpeta válido.");
+  // 1. Check ID in filename
+  if (sId.length > 3 && fName.includes(sId)) return true;
   
-  const rootFiles = await fetchDriveFiles(driveId);
-  if (rootFiles.length === 0) return [];
-
-  const folderMime = "application/vnd.google-apps.folder";
-  let taskFolders = rootFiles.filter(f => 
-      f.mimeType === folderMime && 
-      (f.name.toLowerCase().includes("tarea") || f.name.toLowerCase().includes("trabajo") || f.name.match(/^(task|assignment|deber)\s*\d+/i))
-  );
-
-  const assignments: Assignment[] = [];
-  if (taskFolders.length > 0) {
-      for (const task of taskFolders) {
-          try {
-              const studentFiles = await fetchDriveFiles(task.id);
-              assignments.push({
-                  id: task.id, name: task.name, driveLink: `https://drive.google.com/drive/folders/${task.id}`,
-                  submittedStudents: studentFiles.map(f => f.name), maxPoints: 20
-              });
-          } catch (e) {}
-      }
-  } else {
-      assignments.push({
-          id: driveId, name: "Tarea (Carpeta Principal)", driveLink: `https://drive.google.com/drive/folders/${driveId}`,
-          submittedStudents: rootFiles.map(f => f.name), maxPoints: 20
-      });
-  }
-  return assignments;
-};
-
-const parseStudentList = async (input: string): Promise<Student[]> => {
-  const ai = getAi();
-  const isUrl = input.trim().startsWith('http');
-  const sheetId = isUrl ? extractGoogleId(input) : null;
+  // 2. Token based matching
+  const tokens = sName.split(/\s+/).filter(t => t.length > 2);
+  if (tokens.length === 0) return false;
   
-  let contentToProcess = input;
-  let useSearchTool = false;
-
-  if (isUrl && sheetId) {
-     try {
-        const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json`;
-        const res = await fetch(url);
-        if (res.ok) {
-            const txt = await res.text();
-            const jsonString = txt.substring(txt.indexOf("{"), txt.lastIndexOf("}") + 1);
-            const data = JSON.parse(jsonString);
-            let csvMock = "";
-            data.table?.rows?.forEach((row: any) => {
-                csvMock += row.c.map((cell: any) => cell ? (cell.v || "") : "").join(" | ") + "\n";
-            });
-            contentToProcess = csvMock;
-        } else {
-             useSearchTool = true;
-             contentToProcess = input.replace(/\/edit.*$/, '/htmlview');
-        }
-     } catch(e) { useSearchTool = true; }
-  }
-
-  const prompt = `SYSTEM: Extract student roster. Return text. One student per line: ID | LastName | FirstName.\nDATA: ${contentToProcess.substring(0, 30000)}`;
-  const config: any = {};
-  if (useSearchTool) config.tools = [{ googleSearch: {} }];
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash', contents: prompt, config
-  });
-
-  const students: Student[] = [];
-  (response.text || "").split('\n').forEach(line => {
-      const parts = line.split('|').map(s => s.trim());
-      if (parts.length >= 2) {
-          if (/^\d+$/.test(parts[0]) || parts[0].length > 5) {
-               students.push({ id: parts[0], lastName: parts[1] || "", firstName: parts[2] || "", rawText: line });
-          }
-      }
-  });
-  if (students.length === 0) throw new Error("NO_DATA_FOUND");
-  return students;
+  const matches = tokens.filter(t => fName.includes(t));
+  // Matches at least 2 significant tokens (e.g. one name and one surname)
+  return matches.length >= 2 || (tokens.length === 1 && matches.length === 1);
 };
 
-// --- COMPONENTS ---
-
-const LoginGate: React.FC<{ onLoginSuccess: () => void }> = ({ onLoginSuccess }) => {
-  const [isChecking, setIsChecking] = useState(false);
-  const [hasLoggedIn, setHasLoggedIn] = useState(false);
-
-  useEffect(() => {
-    if (localStorage.getItem('drive_grader_session') === 'active') onLoginSuccess();
-  }, [onLoginSuccess]);
-
-  const handleLoginClick = () => {
-    setIsChecking(true);
-    window.open('https://accounts.google.com/ServiceLogin?service=wise&passive=1209600&continue=https://drive.google.com', '_blank');
-    setTimeout(() => { setHasLoggedIn(true); setIsChecking(false); localStorage.setItem('drive_grader_session', 'active'); }, 2000);
-  };
-
-  return (
-    <div className="max-w-md mx-auto mt-12 animate-fade-in">
-      <div className="bg-white p-8 rounded-2xl shadow-xl border border-slate-200 text-center space-y-6">
-        <div className="w-20 h-20 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4"><Lock size={40} /></div>
-        <div className="space-y-2"><h2 className="text-2xl font-bold text-slate-900">Acceso Seguro</h2><p className="text-slate-500">Inicia sesión en Google para permitir acceso.</p></div>
-        {!hasLoggedIn ? (
-            <button onClick={handleLoginClick} className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold shadow-lg">
-                {isChecking ? 'Verificando...' : 'Iniciar Sesión en Google'}
-            </button>
-        ) : (
-            <button onClick={() => { localStorage.setItem('drive_grader_session', 'active'); onLoginSuccess(); }} className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold shadow-lg">
-                Continuar
-            </button>
-        )}
-      </div>
-    </div>
-  );
-};
-
-const StudentList: React.FC<{ setStudents: (s: Student[]) => void; setAssignments: (a: Assignment[]) => void; onNext: () => void; }> = ({ setStudents, setAssignments, onNext }) => {
-  const [studentInput, setStudentInput] = useState('');
-  const [assignmentInput, setAssignmentInput] = useState('');
+// --- APP ---
+const App: React.FC = () => {
+  const [view, setView] = useState<'setup' | 'results'>('setup');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
-  const [previewAssignments, setPreviewAssignments] = useState<Assignment[]>([]);
-  const [tempStudents, setTempStudents] = useState<Student[]>([]);
-
-  const handleAnalyze = async () => {
-      if (!studentInput.trim() || !assignmentInput.trim()) { setError("Ingresa ambos enlaces."); return; }
-      setLoading(true); setError(null); setPreviewAssignments([]);
-      try {
-          setStatus("Procesando lista...");
-          const parsedStudents = tempStudents.length ? tempStudents : await parseStudentList(studentInput);
-          setTempStudents(parsedStudents);
-          setStatus("Escaneando Drive...");
-          const results = await scanRootFolder(assignmentInput);
-          if (results.length === 0) throw new Error("Carpeta vacía o sin acceso.");
-          setPreviewAssignments(results);
-          setStatus("Listo.");
-      } catch(e: any) { setError(e.message); } finally { setLoading(false); }
-  };
-
-  return (
-    <div className="max-w-2xl mx-auto space-y-6 animate-fade-in">
-      <div className="bg-white p-8 rounded-2xl shadow-lg border border-slate-200 space-y-6">
-        <div>
-            <label className="block text-sm font-bold mb-2">1. Lista de Estudiantes (Sheets)</label>
-            <input type="text" className="w-full p-3 border rounded-lg" placeholder="https://docs.google.com/spreadsheets/..." value={studentInput} onChange={(e) => setStudentInput(e.target.value)} />
-        </div>
-        <div>
-            <label className="block text-sm font-bold mb-2">2. Carpeta de Drive</label>
-            <input type="text" className="w-full p-3 border rounded-lg" placeholder="https://drive.google.com/..." value={assignmentInput} onChange={(e) => setAssignmentInput(e.target.value)} />
-        </div>
-        {error && <div className="p-3 bg-red-50 text-red-600 rounded-lg text-sm">{error}</div>}
-        {previewAssignments.length > 0 && (
-            <div className="bg-emerald-50 p-4 rounded-lg text-emerald-800 text-sm">
-                <b>{previewAssignments.length} Tareas encontradas.</b>
-                <div className="mt-2 space-y-1">{previewAssignments.map(t => <div key={t.id}>{t.name} ({t.submittedStudents.length})</div>)}</div>
-            </div>
-        )}
-        {previewAssignments.length === 0 ? (
-            <button onClick={handleAnalyze} disabled={loading} className="w-full py-3 bg-slate-900 text-white rounded-lg font-bold">
-                {loading ? `Cargando... ${status}` : 'Escanear'}
-            </button>
-        ) : (
-            <button onClick={() => { setStudents(tempStudents); setAssignments(previewAssignments); onNext(); }} className="w-full py-3 bg-green-600 text-white rounded-lg font-bold">
-                Generar Reporte
-            </button>
-        )}
-      </div>
-    </div>
-  );
-};
-
-const GraderView: React.FC<{ students: Student[]; assignments: Assignment[]; onBack: () => void; }> = ({ students, assignments, onBack }) => {
-  return (
-    <div className="space-y-6 animate-fade-in pb-10">
-       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-bold">Resultados</h2>
-          <button onClick={() => downloadExcel(students, assignments)} className="px-4 py-2 bg-green-700 text-white rounded-lg font-bold text-sm flex gap-2">
-            <FileSpreadsheet size={16} /> Exportar Excel
-          </button>
-        </div>
-        <div className="overflow-x-auto border rounded-lg max-h-[60vh]">
-          <table className="w-full text-sm text-left">
-            <thead className="bg-slate-100 font-bold">
-              <tr>
-                <th className="p-3">Estudiante</th>
-                {assignments.map(a => <th key={a.id} className="p-3 text-center">{a.name}</th>)}
-                <th className="p-3 text-center">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {students.map(s => {
-                let total = 0;
-                return (
-                <tr key={s.id} className="border-t hover:bg-slate-50">
-                  <td className="p-3 font-medium">{s.lastName} {s.firstName}</td>
-                  {assignments.map(a => {
-                    const ok = a.submittedStudents.some(f => checkMatch(s, f));
-                    const score = ok ? 20 : 0;
-                    total += score;
-                    return <td key={a.id} className="p-3 text-center">{ok ? <Check size={16} className="text-green-600 inline" /> : <span className="text-slate-300">-</span>}</td>;
-                  })}
-                  <td className="p-3 text-center font-bold text-indigo-700">{total}</td>
-                </tr>
-              )})}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <button onClick={onBack} className="text-slate-500 hover:text-indigo-600 text-sm font-medium">Volver al inicio</button>
-    </div>
-  );
-};
-
-// --- MAIN APP ---
-
-function App() {
-  const [step, setStep] = useState<AppStep>(AppStep.LOGIN);
+  
   const [students, setStudents] = useState<Student[]>([]);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
 
+  const startAnalysis = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const sheetUrl = String(formData.get('sheetUrl') || '');
+    const driveUrl = String(formData.get('driveUrl') || '');
+
+    const sId = extractDriveId(sheetUrl);
+    const dId = extractDriveId(driveUrl);
+
+    if (!sId || !dId) {
+      setError("Por favor, introduce enlaces válidos de Google Sheets y Google Drive.");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setStatus("Conectando con Google...");
+
+    try {
+      const apiKey = process.env.API_KEY || "";
+      const ai = new GoogleGenAI({ apiKey });
+
+      // 1. Obtener datos de la nómina
+      setStatus("Obteniendo nómina de estudiantes...");
+      const gvizUrl = `https://docs.google.com/spreadsheets/d/${sId}/gviz/tq?tqx=out:json`;
+      const sRes = await fetch(gvizUrl);
+      if (!sRes.ok) throw new Error("No se pudo conectar con la hoja de cálculo. Verifica tu conexión.");
+      
+      const sText = await sRes.text();
+      const match = sText.match(/\{.*\}/);
+      if (!match) throw new Error("No se pudo acceder a los datos de la hoja. Verifica que sea pública (Cualquier persona con el enlace).");
+      
+      const tableData = JSON.parse(match[0]);
+      const rawRows = tableData.table.rows.map((r: any) => 
+        (r.c || []).map((cell: any) => cell?.v || "").join(" | ")
+      ).join("\n");
+
+      // 2. Procesar con Gemini para obtener lista limpia
+      setStatus("IA analizando estructura de nombres...");
+      const prompt = `Analiza esta lista de estudiantes y devuelve un array JSON con objetos {id, fullName}. Extrae el número de identificación (cédula) y el nombre completo. Ignora encabezados. Datos:\n${rawRows}`;
+      
+      const aiResponse = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                fullName: { type: Type.STRING }
+              },
+              required: ["id", "fullName"]
+            }
+          }
+        }
+      });
+
+      const parsedStudents = JSON.parse(aiResponse.text || "[]") as Student[];
+      if (parsedStudents.length === 0) throw new Error("No se detectaron estudiantes en la hoja.");
+
+      // 3. Escanear Drive
+      setStatus("Escaneando carpetas de entregas...");
+      const listFiles = async (folderId: string) => {
+        const url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&key=${apiKey}&fields=files(id,name,mimeType)`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Error al acceder a Google Drive. ¿La carpeta es pública?");
+        const data = await res.json();
+        return data.files || [];
+      };
+
+      const rootFiles = await listFiles(dId);
+      const subfolders = rootFiles.filter((f: any) => f.mimeType === "application/vnd.google-apps.folder");
+      
+      const foundAssignments: Assignment[] = [];
+      if (subfolders.length > 0) {
+        for (const f of subfolders) {
+          const files = await listFiles(f.id);
+          foundAssignments.push({ 
+            title: String(f.name), 
+            files: files.map((file: any) => ({ name: String(file.name), id: String(file.id) })) 
+          });
+        }
+      } else {
+        foundAssignments.push({ 
+          title: "Entregas Directas", 
+          files: rootFiles.map((file: any) => ({ name: String(file.name), id: String(file.id) })) 
+        });
+      }
+
+      setStudents(parsedStudents);
+      setAssignments(foundAssignments);
+      setView('results');
+    } catch (err: any) {
+      console.error("Error details:", err);
+      // Ensure error is a string
+      setError(err?.message ? String(err.message) : "Error desconocido durante el procesamiento.");
+    } finally {
+      setLoading(false);
+      setStatus('');
+    }
+  };
+
+  const exportExcel = useCallback(() => {
+    try {
+      const data = students.map(s => {
+        const row: any = { "ID": s.id, "Estudiante": s.fullName };
+        let total = 0;
+        assignments.forEach(a => {
+          const submitted = a.files.some(f => fuzzyMatch(s, f.name));
+          row[a.title] = submitted ? 20 : 0;
+          total += submitted ? 20 : 0;
+        });
+        row["TOTAL"] = total;
+        return row;
+      });
+
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Calificaciones");
+      XLSX.writeFile(wb, `Reporte_Notas_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (err) {
+      console.error("Export error:", err);
+      alert("Error al exportar a Excel.");
+    }
+  }, [students, assignments]);
+
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
-        <div className="max-w-5xl mx-auto px-6 h-16 flex items-center gap-3">
-            <div className="bg-blue-600 p-2 rounded-lg text-white"><GraduationCap size={20} /></div>
-            <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600">DriveGrader AI</h1>
+    <div className="min-h-screen flex flex-col p-4 md:p-8">
+      {/* Header */}
+      <nav className="max-w-6xl w-full mx-auto flex justify-between items-center mb-10">
+        <div className="flex items-center gap-3">
+          <div className="bg-blue-600 p-2.5 rounded-xl text-white shadow-lg shadow-blue-200">
+            <GraduationCap size={24} />
+          </div>
+          <h1 className="text-xl font-bold tracking-tight text-slate-800">DriveGrader <span className="text-blue-600">AI</span></h1>
         </div>
-      </header>
-      <main className="max-w-4xl mx-auto px-6 py-8">
-        {step === AppStep.LOGIN && <LoginGate onLoginSuccess={() => setStep(AppStep.SETUP)} />}
-        {step === AppStep.SETUP && <StudentList setStudents={setStudents} setAssignments={setAssignments} onNext={() => setStep(AppStep.RESULTS)} />}
-        {step === AppStep.RESULTS && <GraderView students={students} assignments={assignments} onBack={() => setStep(AppStep.SETUP)} />}
+        {view === 'results' && (
+          <button 
+            onClick={() => setView('setup')}
+            className="text-sm font-medium text-slate-500 hover:text-blue-600 flex items-center gap-2 transition-all px-4 py-2 hover:bg-white rounded-lg"
+          >
+            <RotateCcw size={16} /> Nuevo Análisis
+          </button>
+        )}
+      </nav>
+
+      <main className="max-w-6xl w-full mx-auto flex-1">
+        {view === 'setup' ? (
+          <div className="max-w-xl mx-auto space-y-8 py-10">
+            <div className="text-center space-y-4">
+              <h2 className="text-4xl font-extrabold text-slate-900">Automatiza tus notas</h2>
+              <p className="text-slate-500 text-lg">Compara tu nómina con archivos entregados en Drive de forma inteligente.</p>
+            </div>
+
+            <form onSubmit={startAnalysis} className="glass p-8 md:p-10 rounded-[2.5rem] shadow-2xl shadow-blue-900/5 space-y-8">
+              <div className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase text-slate-400 tracking-widest flex items-center gap-2 px-1">
+                    <FileSpreadsheet size={14} className="text-blue-500" /> 1. Enlace de la Nómina (Sheets)
+                  </label>
+                  <input 
+                    required
+                    name="sheetUrl"
+                    placeholder="https://docs.google.com/spreadsheets/d/..."
+                    className="w-full p-4 bg-white border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase text-slate-400 tracking-widest flex items-center gap-2 px-1">
+                    <FolderOpen size={14} className="text-emerald-500" /> 2. Carpeta de Entregas (Drive)
+                  </label>
+                  <input 
+                    required
+                    name="driveUrl"
+                    placeholder="https://drive.google.com/drive/folders/..."
+                    className="w-full p-4 bg-white border border-slate-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 outline-none transition-all"
+                  />
+                </div>
+              </div>
+
+              {error && (
+                <div className="p-4 bg-red-50 border border-red-100 text-red-600 rounded-2xl text-sm flex gap-3 items-center">
+                  <AlertCircle size={20} className="shrink-0" />
+                  <span className="font-medium">{String(error)}</span>
+                </div>
+              )}
+
+              {loading ? (
+                <div className="space-y-4">
+                  <div className="loading-bar"><div className="loading-bar-inner"></div></div>
+                  <p className="text-center text-sm font-semibold text-blue-600 animate-pulse uppercase tracking-widest">
+                    {String(status)}
+                  </p>
+                </div>
+              ) : (
+                <button 
+                  type="submit"
+                  className="w-full py-5 bg-slate-900 hover:bg-black text-white rounded-2xl font-bold flex items-center justify-center gap-3 shadow-xl transition-all active:scale-[0.98]"
+                >
+                  Procesar con IA <ArrowRight size={20} />
+                </button>
+              )}
+
+              <div className="pt-4 border-t flex items-center gap-2 text-slate-400 justify-center">
+                <ShieldCheck size={14} />
+                <span className="text-[10px] font-bold uppercase tracking-wider">Seguridad de Datos Activa</span>
+              </div>
+            </form>
+          </div>
+        ) : (
+          <div className="space-y-8 animate-fade-in">
+            <div className="flex flex-col md:flex-row justify-between items-center bg-white p-8 rounded-3xl border border-slate-100 shadow-sm gap-6">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-900">Análisis Finalizado</h2>
+                <p className="text-slate-500">Sincronización exitosa entre Nómina ({students.length}) y Drive ({assignments.length} actividades).</p>
+              </div>
+              <button 
+                onClick={exportExcel}
+                className="w-full md:w-auto px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold flex items-center justify-center gap-3 shadow-lg shadow-emerald-100 transition-all active:scale-95"
+              >
+                <Download size={20} /> Descargar Reporte (.xlsx)
+              </button>
+            </div>
+
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead className="bg-slate-50/50">
+                    <tr>
+                      <th className="p-6 font-bold text-slate-400 text-[10px] uppercase tracking-widest border-b">Estudiante</th>
+                      {assignments.map((a, i) => (
+                        <th key={i} className="p-6 font-bold text-slate-400 text-[10px] uppercase tracking-widest text-center border-b">
+                          {String(a.title)}
+                        </th>
+                      ))}
+                      <th className="p-6 font-bold text-blue-600 text-[10px] uppercase tracking-widest text-center border-b bg-blue-50/50">Calificación</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {students.map((s, idx) => {
+                      let total = 0;
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="p-6">
+                            <p className="font-bold text-slate-800">{String(s.fullName)}</p>
+                            <p className="text-[10px] text-slate-400 font-mono mt-1 tracking-tighter">{String(s.id)}</p>
+                          </td>
+                          {assignments.map((a, i) => {
+                            const submitted = a.files.some(f => fuzzyMatch(s, f.name));
+                            if (submitted) total += 20;
+                            return (
+                              <td key={i} className="p-6 text-center">
+                                {submitted ? (
+                                  <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-sm ring-4 ring-emerald-50">
+                                    <Check size={18} strokeWidth={3} />
+                                  </div>
+                                ) : (
+                                  <div className="w-10 h-10 bg-slate-100 text-slate-300 rounded-full flex items-center justify-center mx-auto opacity-40">
+                                    <X size={18} strokeWidth={2.5} />
+                                  </div>
+                                )}
+                              </td>
+                            );
+                          })}
+                          <td className="p-6 text-center bg-blue-50/20">
+                            <span className="text-xl font-black text-blue-700">{total}</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
+
+      <footer className="max-w-6xl w-full mx-auto pt-10 pb-6 text-center">
+        <p className="text-slate-300 text-[10px] font-bold uppercase tracking-[0.3em]">DriveGrader AI v2.0 — Educación Inteligente</p>
+      </footer>
     </div>
   );
-}
+};
 
-const rootElement = document.getElementById('root');
-if (rootElement) {
-  const root = ReactDOM.createRoot(rootElement);
-  root.render(<React.StrictMode><App /></React.StrictMode>);
+// --- RENDER ---
+const container = document.getElementById('root');
+if (container) {
+  const root = createRoot(container);
+  root.render(<App />);
 }

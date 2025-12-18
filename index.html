@@ -1,35 +1,45 @@
 <!DOCTYPE html>
 <html lang="es">
-  <head>
+<head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DriveGrader AI</title>
+    <title>DriveGrader AI - Calificador Automático</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <!-- Babel Standalone -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script>
-      // Polyfill for process.env
-      window.process = { env: { NODE_ENV: 'development' } };
+        // Mock de entorno seguro
+        window.process = { env: { NODE_ENV: 'production' } };
     </script>
     <script type="importmap">
 {
   "imports": {
-    "lucide-react": "https://esm.sh/lucide-react@0.292.0",
-    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-    "react-dom": "https://esm.sh/react-dom@18.2.0",
-    "@google/genai": "https://esm.sh/@google/genai@0.1.1",
     "react": "https://esm.sh/react@18.2.0",
+    "react-dom": "https://esm.sh/react-dom@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+    "lucide-react": "https://esm.sh/lucide-react@0.460.0?external=react",
+    "@google/genai": "https://esm.sh/@google/genai@1.0.1",
     "xlsx": "https://esm.sh/xlsx@0.18.5",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
     "react/": "https://esm.sh/react@^19.2.3/"
   }
 }
 </script>
-  </head>
-  <body class="bg-slate-50 text-slate-900">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; color: #0f172a; }
+        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.2); }
+        .loading-bar { height: 4px; width: 100%; background: #e2e8f0; overflow: hidden; border-radius: 2px; }
+        .loading-bar-inner { height: 100%; background: #2563eb; animation: loading 2s infinite ease-in-out; }
+        @keyframes loading { 0% { width: 0%; margin-left: 0%; } 50% { width: 40%; margin-left: 30%; } 100% { width: 0%; margin-left: 100%; } }
+        
+        /* Utility for smooth transitions */
+        .fade-enter { opacity: 0; transform: translateY(10px); }
+        .fade-enter-active { opacity: 1; transform: translateY(0); transition: opacity 300ms, transform 300ms; }
+    </style>
+</head>
+<body>
     <div id="root"></div>
-    <!-- Load the Single File Bundle -->
     <script type="text/babel" data-type="module" data-presets="react,typescript" src="./index.tsx"></script>
-  </body>
+</body>
 </html>
